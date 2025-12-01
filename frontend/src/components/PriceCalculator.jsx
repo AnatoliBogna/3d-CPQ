@@ -227,18 +227,39 @@ const PriceCalculator = () => {
     const handleQuoteSubmit = async (e) => {
         e.preventDefault();
         setFormStatus('sending');
-        setTimeout(() => {
-            setShowQuoteModal(false);
-            setFormStatus(null);
-            setQuoteForm({ name: '', company: '', phone: '', email: '', surface: '', color: '', application: '', notes: '' });
-        }, 2000);
+        const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
+        const payload = {
+            filename: currentFileName,
+            technology: currentEstimate.breakdown_detailed.technology,
+            material: currentEstimate.name,
+            finish: selectedFinish,
+            delivery: selectedDelivery,
+            quantity: quantity,
+            estimated_price: parseFloat(currentEstimate.calculated_total),
+            ...quoteForm
+        };
+
+        try {
+            await axios.post(`${API_BASE}/send-quote`, payload);
+            setFormStatus('success');
+            setTimeout(() => {
+                setShowQuoteModal(false);
+                setFormStatus(null);
+                setQuoteForm({ name: '', company: '', phone: '', email: '', surface: '', color: '', application: '', notes: '' });
+            }, 3000);
+        } catch (error) {
+            console.error(error);
+            setFormStatus('error');
+        }
     };
 
     return (
         <>
             <style>{`
-                :root { color-scheme: light; }
+                :root { color-scheme: dark; }
                 * { box-sizing: border-box; }
+                body { background-color: #0f0f0f; color: #e0e0e0; }
                 .blur-content { filter: blur(8px); transition: filter 0.3s ease; pointer-events: none; }
             `}</style>
 
@@ -261,11 +282,11 @@ const PriceCalculator = () => {
                                     <input {...getInputProps()} />
                                     <div style={styles.uploadIcon}>⬆️</div>
                                     <p style={styles.uploadText}>{isDragActive ? "Pudota tähän" : "Raahaa tiedosto tähän"}</p>
-                                    <p style={styles.uploadHint}>Tuetut: .STL, .OBJ, .3MF</p>
+                                    <p style={styles.uploadHint}>Tuetut: STL, OBJ, 3MF</p>
                                 </div>
                             ) : (
                                 <div style={styles.viewerContainer}>
-                                    <ModelViewer fileUrl={fileUrl} fileName={currentFileName} />
+                                    <ModelViewer fileUrl={fileUrl} fileName={currentFileName} visualizationUrl={result?.visualization_url} />
                                     <button onClick={handleReset} style={styles.reuploadBtn}>
                                         ↻ Lataa uusi malli
                                     </button>
@@ -278,7 +299,15 @@ const PriceCalculator = () => {
                             {loading && <div style={styles.loadingBox}><div style={styles.spinner}></div><p>Analysoidaan...</p></div>}
                             {error && <div style={styles.errorBox}>{error}</div>}
 
-                            {result && !loading && (
+                            {result && result.error && (
+                                <div style={styles.errorBox}>
+                                    <h3>Virhe analyysissa</h3>
+                                    <p>{result.error}</p>
+                                    <button onClick={handleReset} style={{ ...styles.reuploadBtn, width: 'auto', marginTop: '10px', background: '#333', color: '#fff', border: '1px solid #555' }}>Yritä uudelleen</button>
+                                </div>
+                            )}
+
+                            {result && !result.error && !loading && result.geometry && (
                                 <div style={styles.resultsCard}>
 
                                     <div style={styles.specsContainer}>
@@ -297,18 +326,20 @@ const PriceCalculator = () => {
                                         {/* 1. TEKNIIKKA */}
                                         <div style={styles.inputGroup} ref={techDropdownRef}>
                                             <label style={styles.label}>Valmistustekniikka</label>
-                                            <div style={styles.customSelectTrigger} onClick={() => toggleDropdown('tech')}>
-                                                <span>{selectedTech && result.structure ? findTechName(selectedTech, result.structure) : "Valitse tekniikka..."}</span>
-                                                <span style={{ fontSize: '0.8rem' }}>▼</span>
-                                            </div>
-                                            {openDropdown === 'tech' && (
-                                                <div style={styles.customOptionsList}>
-                                                    {techOptions.map((opt) => (
-                                                        opt.type === 'header' ? <div key={opt.key} style={styles.optionHeader}>{opt.label}</div> :
-                                                            <div key={opt.key} style={{ ...styles.customOption, paddingLeft: '24px', color: selectedTech === opt.key ? '#007bff' : '#333' }} onClick={() => handleTechChange(opt.key)}>{opt.label}</div>
-                                                    ))}
+                                            <div style={{ position: 'relative' }}>
+                                                <div style={styles.customSelectTrigger} onClick={() => toggleDropdown('tech')}>
+                                                    <span>{selectedTech && result.structure ? result.structure[Object.keys(result.structure).find(cat => result.structure[cat].methods[selectedTech])]?.methods[selectedTech].name : "Valitse..."}</span>
+                                                    <span style={{ fontSize: '0.8rem' }}>▼</span>
                                                 </div>
-                                            )}
+                                                {openDropdown === 'tech' && (
+                                                    <div style={styles.customOptionsList}>
+                                                        {techOptions.map((opt) => (
+                                                            opt.type === 'header' ? <div key={opt.key} style={styles.optionHeader}>{opt.label}</div> :
+                                                                <div key={opt.key} style={{ ...styles.customOption, paddingLeft: '24px', color: selectedTech === opt.key ? '#4fc3f7' : '#e0e0e0' }} onClick={() => handleTechChange(opt.key)}>{opt.label}</div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
 
                                         {/* 2. MATERIAALI + MÄÄRÄ */}
@@ -316,20 +347,22 @@ const PriceCalculator = () => {
                                             <div style={styles.inputRow}>
                                                 <div style={{ flex: 3, position: 'relative' }}>
                                                     <label style={styles.label}>Materiaali</label>
-                                                    <div style={styles.customSelectTrigger} onClick={() => toggleDropdown('mat')}>
-                                                        <span>{currentEstimate ? currentEstimate.name : "Valitse..."}</span>
-                                                        <span style={{ fontSize: '0.8rem' }}>▼</span>
-                                                    </div>
-                                                    {openDropdown === 'mat' && (
-                                                        <div style={styles.customOptionsList}>
-                                                            {materialOptions.map((opt) => (
-                                                                <div key={opt.key} style={{ ...styles.customOption, backgroundColor: selectedMaterial === opt.key ? '#f0f9ff' : 'white' }} onClick={() => { setSelectedMaterial(opt.key); setOpenDropdown(null); }}>
-                                                                    <div style={{ fontWeight: '600' }}>{opt.name}</div>
-                                                                    <div style={{ fontSize: '0.85rem', color: '#666' }}>{opt.unit_price} €/kpl</div>
-                                                                </div>
-                                                            ))}
+                                                    <div style={{ position: 'relative' }}>
+                                                        <div style={styles.customSelectTrigger} onClick={() => toggleDropdown('mat')}>
+                                                            <span>{currentEstimate ? currentEstimate.name : "Valitse..."}</span>
+                                                            <span style={{ fontSize: '0.8rem' }}>▼</span>
                                                         </div>
-                                                    )}
+                                                        {openDropdown === 'mat' && (
+                                                            <div style={styles.customOptionsList}>
+                                                                {materialOptions.map((opt) => (
+                                                                    <div key={opt.key} style={{ ...styles.customOption, backgroundColor: selectedMaterial === opt.key ? '#2d2d2d' : '#1a1a1a' }} onClick={() => { setSelectedMaterial(opt.key); setOpenDropdown(null); }}>
+                                                                        <div style={{ fontWeight: '600' }}>{opt.name}</div>
+                                                                        <div style={{ fontSize: '0.85rem', color: '#999' }}>{opt.unit_price} €/kpl</div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 <div style={{ flex: 1 }}>
                                                     <label style={styles.label}>Määrä</label>
@@ -343,11 +376,8 @@ const PriceCalculator = () => {
                                         <div style={styles.inputGroup}>
                                             <div style={styles.inputRow}>
 
-                                                {/* VIIMEISTELY */}
-                                                <div style={{ flex: 1 }} ref={finishDropdownRef}>
+                                                <div style={{ flex: 1, position: 'relative' }} ref={finishDropdownRef}>
                                                     <label style={styles.label}>Viimeistelytaso</label>
-
-                                                    {/* KÄÄRE: Position relative vain tähän, jotta lista aukeaa heti triggerin alle */}
                                                     <div style={{ position: 'relative' }}>
                                                         <div style={styles.customSelectTrigger} onClick={() => toggleDropdown('finish')}>
                                                             <span>{finishOptions.find(o => o.key === selectedFinish)?.label}</span>
@@ -356,26 +386,18 @@ const PriceCalculator = () => {
                                                         {openDropdown === 'finish' && (
                                                             <div style={styles.customOptionsList}>
                                                                 {finishOptions.map((opt) => (
-                                                                    <div
-                                                                        key={opt.key}
-                                                                        style={{ ...styles.customOption, backgroundColor: selectedFinish === opt.key ? '#f0f9ff' : 'white', color: selectedFinish === opt.key ? '#007bff' : '#333' }}
-                                                                        onClick={() => { setSelectedFinish(opt.key); setOpenDropdown(null); }}
-                                                                    >
+                                                                    <div key={opt.key} style={{ ...styles.customOption, backgroundColor: selectedFinish === opt.key ? '#2d2d2d' : '#1a1a1a', color: selectedFinish === opt.key ? '#4fc3f7' : '#e0e0e0' }} onClick={() => { setSelectedFinish(opt.key); setOpenDropdown(null); }}>
                                                                         <div>{opt.label}</div>
                                                                     </div>
                                                                 ))}
                                                             </div>
                                                         )}
                                                     </div>
-
                                                     <p style={styles.materialDesc}>{currentFinishObj?.desc}</p>
                                                 </div>
 
-                                                {/* TOIMITUS */}
-                                                <div style={{ flex: 1 }} ref={deliveryDropdownRef}>
+                                                <div style={{ flex: 1, position: 'relative' }} ref={deliveryDropdownRef}>
                                                     <label style={styles.label}>Toimitusnopeus</label>
-
-                                                    {/* KÄÄRE: Position relative vain tähän */}
                                                     <div style={{ position: 'relative' }}>
                                                         <div style={styles.customSelectTrigger} onClick={() => toggleDropdown('delivery')}>
                                                             <span>{deliveryOptions.find(o => o.key === selectedDelivery)?.label}</span>
@@ -384,18 +406,13 @@ const PriceCalculator = () => {
                                                         {openDropdown === 'delivery' && (
                                                             <div style={styles.customOptionsList}>
                                                                 {deliveryOptions.map((opt) => (
-                                                                    <div
-                                                                        key={opt.key}
-                                                                        style={{ ...styles.customOption, backgroundColor: selectedDelivery === opt.key ? '#f0f9ff' : 'white', color: selectedDelivery === opt.key ? '#007bff' : '#333' }}
-                                                                        onClick={() => { setSelectedDelivery(opt.key); setOpenDropdown(null); }}
-                                                                    >
+                                                                    <div key={opt.key} style={{ ...styles.customOption, backgroundColor: selectedDelivery === opt.key ? '#2d2d2d' : '#1a1a1a', color: selectedDelivery === opt.key ? '#4fc3f7' : '#e0e0e0' }} onClick={() => { setSelectedDelivery(opt.key); setOpenDropdown(null); }}>
                                                                         <div>{opt.label}</div>
                                                                     </div>
                                                                 ))}
                                                             </div>
                                                         )}
                                                     </div>
-
                                                     <p style={styles.materialDesc}>{currentDeliveryObj?.desc}</p>
                                                 </div>
 
@@ -447,18 +464,18 @@ const PriceCalculator = () => {
                                 <button style={styles.closeButton} onClick={() => setShowDetails(false)}>×</button>
                             </div>
                             <div style={styles.bomContainer}>
-                                <div style={{ ...styles.bomRow, borderBottom: '1px solid #eee', paddingBottom: '10px', marginBottom: '10px' }}>
-                                    <strong style={{ color: '#2d3748', fontSize: '1rem' }}>Valmistustekniikka</strong>
-                                    <strong style={{ color: '#2d3748', fontSize: '1rem' }}>{currentEstimate.breakdown_detailed.technology}</strong>
+                                <div style={{ ...styles.bomRow, borderBottom: '1px solid #333', paddingBottom: '10px', marginBottom: '10px' }}>
+                                    <strong style={{ color: '#e0e0e0', fontSize: '1rem' }}>Valmistustekniikka</strong>
+                                    <strong style={{ color: '#e0e0e0', fontSize: '1rem' }}>{currentEstimate.breakdown_detailed.technology}</strong>
                                 </div>
                                 <div style={styles.bomRow}><span>Materiaali ({currentEstimate.breakdown_detailed.material_name})</span><span></span></div>
                                 <div style={styles.bomRow}><span>Tuotanto ({quantity} kpl)</span><span>{currentEstimate.breakdown_detailed.row_material} €</span></div>
                                 <div style={styles.bomRow}><span>Aloitusmaksu (Kiinteä)</span><span>{currentEstimate.breakdown_detailed.row_startup} €</span></div>
-                                {parseFloat(currentEstimate.breakdown_detailed.row_finish) > 0 && <div style={{ ...styles.bomRow, color: '#2f855a' }}><span>+ Viimeistely ({currentEstimate.breakdown_detailed.label_finish})</span><span>{currentEstimate.breakdown_detailed.row_finish} €</span></div>}
-                                {parseFloat(currentEstimate.breakdown_detailed.row_delivery) > 0 && <div style={{ ...styles.bomRow, color: '#2f855a' }}><span>+ Toimitus ({currentEstimate.breakdown_detailed.label_delivery})</span><span>{currentEstimate.breakdown_detailed.row_delivery} €</span></div>}
+                                {parseFloat(currentEstimate.breakdown_detailed.row_finish) > 0 && <div style={{ ...styles.bomRow, color: '#4fc3f7' }}><span>+ Viimeistely ({currentEstimate.breakdown_detailed.label_finish})</span><span>{currentEstimate.breakdown_detailed.row_finish} €</span></div>}
+                                {parseFloat(currentEstimate.breakdown_detailed.row_delivery) > 0 && <div style={{ ...styles.bomRow, color: '#4fc3f7' }}><span>+ Toimitus ({currentEstimate.breakdown_detailed.label_delivery})</span><span>{currentEstimate.breakdown_detailed.row_delivery} €</span></div>}
                                 <hr style={styles.bomDivider} />
                                 <div style={styles.bomRow}><strong>Välisumma (ALV 0%)</strong><strong>{currentEstimate.calculated_total} €</strong></div>
-                                <div style={{ ...styles.bomRow, fontSize: '0.85rem', color: '#666' }}><span>ALV 25.5%</span><span>{currentEstimate.breakdown_detailed.row_vat} €</span></div>
+                                <div style={{ ...styles.bomRow, fontSize: '0.85rem', color: '#999' }}><span>ALV 25.5%</span><span>{currentEstimate.breakdown_detailed.row_vat} €</span></div>
                                 <div style={styles.bomTotalRow}><span>Yhteensä</span><span>{currentEstimate.breakdown_detailed.row_total_inc_vat} €</span></div>
                             </div>
                         </div>
@@ -474,7 +491,7 @@ const PriceCalculator = () => {
                                 <button style={styles.closeButton} onClick={() => setShowQuoteModal(false)}>×</button>
                             </div>
                             {formStatus === 'success' ? (
-                                <div style={{ textAlign: 'center', padding: '40px', color: '#2f855a' }}>
+                                <div style={{ textAlign: 'center', padding: '40px', color: '#4fc3f7' }}>
                                     <h3>Kiitos!</h3><p>Olemme yhteydessä pian.</p>
                                 </div>
                             ) : (
@@ -488,36 +505,39 @@ const PriceCalculator = () => {
                                             <div style={styles.field}><label style={styles.label}>Sähköposti *</label><input required type="email" style={styles.modalInput} value={quoteForm.email} onChange={e => setQuoteForm({ ...quoteForm, email: e.target.value })} /></div>
                                         </div>
                                     </div>
-                                    <div style={styles.formGrid}>
-                                        <div style={styles.field}>
-                                            <label style={styles.label}>Pintastruktuuri</label>
-                                            <input
-                                                type="text"
-                                                placeholder="Esim. Sileä, Koneistuspinta, VDI 3400..."
-                                                style={styles.modalInput}
-                                                value={quoteForm.surface}
-                                                onChange={e => setQuoteForm({ ...quoteForm, surface: e.target.value })}
-                                            />
-                                        </div>
-                                        <div style={styles.field}>
-                                            <label style={styles.label}>Väri</label>
-                                            <input
-                                                type="text"
-                                                placeholder="Jätä tyhjäksi jos ei väliä"
-                                                style={styles.modalInput}
-                                                value={quoteForm.color}
-                                                onChange={e => setQuoteForm({ ...quoteForm, color: e.target.value })}
-                                            />
-                                        </div>
-                                        <div style={{ ...styles.field, gridColumn: '1 / -1' }}>
-                                            <label style={styles.label}>Käyttökohde</label>
-                                            <input
-                                                type="text"
-                                                placeholder="Esim. Ulkokäyttö, UV-altistus, Kemikaalien kesto, Prototyyppi..."
-                                                style={styles.modalInput}
-                                                value={quoteForm.application}
-                                                onChange={e => setQuoteForm({ ...quoteForm, application: e.target.value })}
-                                            />
+                                    <div style={styles.formSection}>
+                                        <h4 style={styles.sectionTitle}>Tuotteen tarkennukset</h4>
+                                        <div style={styles.formGrid}>
+                                            <div style={styles.field}>
+                                                <label style={styles.label}>Pintastruktuuri</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Esim. Sileä, Koneistuspinta, VDI 3400..."
+                                                    style={styles.modalInput}
+                                                    value={quoteForm.surface}
+                                                    onChange={e => setQuoteForm({ ...quoteForm, surface: e.target.value })}
+                                                />
+                                            </div>
+                                            <div style={styles.field}>
+                                                <label style={styles.label}>Väri</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Jätä tyhjäksi jos ei väliä"
+                                                    style={styles.modalInput}
+                                                    value={quoteForm.color}
+                                                    onChange={e => setQuoteForm({ ...quoteForm, color: e.target.value })}
+                                                />
+                                            </div>
+                                            <div style={{ ...styles.field, gridColumn: '1 / -1' }}>
+                                                <label style={styles.label}>Käyttökohde</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Esim. Ulkokäyttö, UV-altistus, Kemikaalien kesto, Prototyyppi..."
+                                                    style={styles.modalInput}
+                                                    value={quoteForm.application}
+                                                    onChange={e => setQuoteForm({ ...quoteForm, application: e.target.value })}
+                                                />
+                                            </div>
                                         </div>
                                     </div>
                                     <div style={styles.formSection}>
@@ -537,7 +557,7 @@ const PriceCalculator = () => {
                 )}
 
                 <footer style={styles.footer}>
-                    by Anton Niemi for Ajatec 2025
+                    by Anton Niemi
                 </footer>
 
             </div>
@@ -555,61 +575,56 @@ function findTechName(techKey, structure) {
     return techKey;
 }
 
+// --- DARK MODE TYYLIT ---
 const styles = {
-    // --- LAYOUT ---
-    pageContainer: { minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '20px', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#333', background: '#f5f7fa', isolation: 'isolate' },
+    pageContainer: { minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '20px', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#e0e0e0', background: '#141414', isolation: 'isolate' },
     contentWrapper: { width: '70vw', maxWidth: '1600px', minWidth: '350px' },
     header: { textAlign: 'center', marginBottom: '40px' },
-    title: { fontSize: '2.5rem', fontWeight: '700', marginBottom: '10px', color: '#1a1a1a' },
-    subtitle: { fontSize: '1.1rem', color: '#666' },
+    title: { fontSize: '2.5rem', fontWeight: '700', marginBottom: '10px', color: '#ffffff' },
+    subtitle: { fontSize: '1.1rem', color: '#a0aec0' },
     mainGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '40px', alignItems: 'start', width: '100%' },
 
-    // --- VASEN ---
     leftColumn: { display: 'flex', flexDirection: 'column' },
-    dropzone: { border: '2px dashed #cbd5e0', borderRadius: '16px', padding: '60px 20px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', minHeight: '450px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' },
-    viewerContainer: { width: '100%', backgroundColor: 'white', borderRadius: '16px', padding: '10px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' },
-    uploadIcon: { fontSize: '48px', marginBottom: '20px', opacity: 0.3 },
-    uploadText: { fontSize: '1.2rem', fontWeight: '500', marginBottom: '8px' },
+    dropzone: { border: '2px dashed #333', borderRadius: '16px', padding: '60px 20px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', minHeight: '450px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a1a' },
+    viewerContainer: { width: '100%', backgroundColor: '#1a1a1a', borderRadius: '16px', padding: '10px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3)' },
+    uploadIcon: { fontSize: '48px', marginBottom: '20px', opacity: 0.5, color: '#fff' },
+    uploadText: { fontSize: '1.2rem', fontWeight: '500', marginBottom: '8px', color: '#e0e0e0' },
     uploadHint: { fontSize: '0.9rem', color: '#888' },
-    reuploadBtn: { marginTop: '10px', width: '100%', padding: '12px', backgroundColor: '#edf2f7', color: '#4a5568', border: 'none', borderRadius: '8px', fontSize: '0.9rem', fontWeight: '600', cursor: 'pointer', transition: 'background 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' },
+    reuploadBtn: { marginTop: '10px', width: '100%', padding: '12px', backgroundColor: '#2d2d2d', color: '#e0e0e0', border: '1px solid #444', borderRadius: '8px', fontSize: '0.9rem', fontWeight: '600', cursor: 'pointer', transition: 'background 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' },
 
-    // --- OIKEA ---
     rightColumn: { display: 'flex', flexDirection: 'column' },
-    resultsCard: { background: '#fff', borderRadius: '20px', padding: '32px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)', border: '1px solid #edf2f7', position: 'relative' },
-    cardTitle: { marginTop: 0, marginBottom: '24px', fontSize: '1.5rem', fontWeight: '700', color: '#2d3748' },
+    resultsCard: { background: '#1a1a1a', borderRadius: '20px', padding: '32px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)', border: '1px solid #333', position: 'relative' },
+    cardTitle: { marginTop: 0, marginBottom: '24px', fontSize: '1.5rem', fontWeight: '700', color: '#fff' },
 
-    // SPECS
     specsContainer: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '30px' },
-    specCard: { backgroundColor: '#f8fafc', padding: '15px', borderRadius: '12px', border: '1px solid #edf2f7', display: 'flex', alignItems: 'center', gap: '15px' },
+    specCard: { backgroundColor: '#252525', padding: '15px', borderRadius: '12px', border: '1px solid #333', display: 'flex', alignItems: 'center', gap: '15px' },
     specIcon: { fontSize: '24px', opacity: 0.7 },
     specContent: { display: 'flex', flexDirection: 'column' },
-    specLabel: { fontSize: '0.8rem', color: '#718096', fontWeight: '600', textTransform: 'uppercase' },
-    specValue: { fontSize: '1rem', fontWeight: '700', color: '#2d3748' },
+    specLabel: { fontSize: '0.8rem', color: '#999', fontWeight: '600', textTransform: 'uppercase' },
+    specValue: { fontSize: '1rem', fontWeight: '700', color: '#fff' },
 
-    // FORM
     formStack: { display: 'flex', flexDirection: 'column', gap: '24px', marginBottom: '20px' },
     inputGroup: { position: 'relative', width: '100%' },
     inputRow: { display: 'flex', gap: '16px', alignItems: 'flex-start' },
-    label: { display: 'block', fontSize: '0.8rem', fontWeight: '700', marginBottom: '8px', color: '#718096', textTransform: 'uppercase', letterSpacing: '0.05em' },
+    label: { display: 'block', fontSize: '0.8rem', fontWeight: '700', marginBottom: '8px', color: '#999', textTransform: 'uppercase', letterSpacing: '0.05em' },
 
-    customSelectTrigger: { width: '100%', padding: '14px 16px', fontSize: '1rem', borderRadius: '12px', border: '2px solid #e2e8f0', backgroundColor: '#fff', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none', color: '#333' },
-    customOptionsList: { position: 'absolute', top: '100%', left: 0, width: '100%', backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', marginTop: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)', zIndex: 100, maxHeight: '350px', overflowY: 'auto', boxSizing: 'border-box' },
-    customOption: { padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid #f7fafc', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.2s' },
-    optionHeader: { padding: '12px 16px', backgroundColor: '#f8fafc', color: '#718096', fontSize: '0.8rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #edf2f7' },
-    quantityInput: { width: '100%', padding: '14px 16px', fontSize: '1rem', borderRadius: '12px', border: '2px solid #e2e8f0', backgroundColor: '#fff', color: '#333', outline: 'none' },
-    materialDesc: { fontSize: '0.8rem', color: '#718096', marginTop: '8px', lineHeight: '1.4', paddingLeft: '4px' },
+    customSelectTrigger: { width: '100%', padding: '14px 16px', fontSize: '1rem', borderRadius: '12px', border: '2px solid #333', backgroundColor: '#252525', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none', color: '#e0e0e0' },
+    customOptionsList: { position: 'absolute', top: '100%', left: 0, width: '100%', backgroundColor: '#252525', border: '1px solid #333', borderRadius: '12px', marginTop: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)', zIndex: 100, maxHeight: '350px', overflowY: 'auto', boxSizing: 'border-box' },
+    customOption: { padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.2s' },
+    optionHeader: { padding: '12px 16px', backgroundColor: '#1a1a1a', color: '#999', fontSize: '0.8rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #333' },
+    quantityInput: { width: '100%', padding: '14px 16px', fontSize: '1rem', borderRadius: '12px', border: '2px solid #333', backgroundColor: '#252525', color: '#e0e0e0', outline: 'none' },
+    materialDesc: { fontSize: '0.8rem', color: '#888', marginTop: '8px', lineHeight: '1.4', paddingLeft: '4px' },
 
-    // HINTA
-    priceContainer: { marginTop: '10px', padding: '15px 25px', backgroundColor: '#f0fff4', borderRadius: '16px', border: '1px solid #c6f6d5', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' },
-    priceHeader: { color: '#2f855a', fontWeight: '600', fontSize: '0.8rem', marginBottom: '2px' },
-    priceMain: { fontSize: '2.5rem', fontWeight: '800', color: '#22543d', lineHeight: '1', letterSpacing: '-1px' },
+    priceContainer: { marginTop: '10px', padding: '15px 25px', backgroundColor: '#1e2a25', borderRadius: '16px', border: '1px solid #2f855a', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' },
+    priceHeader: { color: '#48bb78', fontWeight: '600', fontSize: '0.8rem', marginBottom: '2px' },
+    priceMain: { fontSize: '2.5rem', fontWeight: '800', color: '#68d391', lineHeight: '1', letterSpacing: '-1px' },
     unitPriceHint: { fontSize: '0.9rem', color: '#48bb78', marginTop: '2px' },
 
     breakdownButton: {
         marginTop: '10px',
-        background: 'white',
-        border: '1px solid #c6f6d5',
-        color: '#2f855a',
+        background: 'transparent',
+        border: '1px solid #2f855a',
+        color: '#68d391',
         padding: '6px 12px',
         borderRadius: '20px',
         fontSize: '0.8rem',
@@ -620,53 +635,40 @@ const styles = {
         gap: '6px',
         transition: 'all 0.2s'
     },
-
-    footer: {
-        marginTop: '120px',
-        color: '#a0aec0',
-        fontSize: '0.85rem',
-        fontWeight: '500',
-        letterSpacing: '0.05em',
-        textAlign: 'center',
-        width: '100%',
-        opacity: 0.8
-    },
-
-    infoIcon: { width: '16px', height: '16px', borderRadius: '50%', background: '#2f855a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold', fontStyle: 'normal' },
+    infoIcon: { width: '16px', height: '16px', borderRadius: '50%', background: '#2f855a', color: '#1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold', fontStyle: 'normal' },
 
     actionRow: { display: 'flex', gap: '15px', width: '100%', marginTop: '20px' },
-    cartButton: { flex: 1, padding: '18px', backgroundColor: '#1a202c', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: '600', cursor: 'pointer', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', transition: 'transform 0.1s ease' },
-    quoteButton: { flex: 1, padding: '18px', backgroundColor: 'transparent', color: '#1a202c', border: '2px solid #e2e8f0', borderRadius: '12px', fontSize: '1rem', fontWeight: '600', cursor: 'pointer', transition: 'background 0.2s ease' },
+    cartButton: { flex: 1, padding: '18px', backgroundColor: '#4fc3f7', color: '#000', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: '600', cursor: 'pointer', boxShadow: '0 4px 6px rgba(0,0,0,0.3)', transition: 'transform 0.1s ease' },
+    quoteButton: { flex: 1, padding: '18px', backgroundColor: 'transparent', color: '#4fc3f7', border: '2px solid #4fc3f7', borderRadius: '12px', fontSize: '1rem', fontWeight: '600', cursor: 'pointer', transition: 'background 0.2s ease' },
 
-    // MODAL
-    modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(5px)' },
-    modalBox: { backgroundColor: 'white', padding: '30px', borderRadius: '16px', width: '90%', maxWidth: '500px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', border: '1px solid #e2e8f0' },
-    modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '10px', borderBottom: '1px solid #eee' },
-    closeButton: { background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: '#666' },
+    footer: { marginTop: '120px', color: '#555', fontSize: '0.85rem', fontWeight: '500', letterSpacing: '0.05em', textAlign: 'center', width: '100%', opacity: 0.8 },
+
+    modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(5px)' },
+    modalBox: { backgroundColor: '#1a1a1a', padding: '30px', borderRadius: '16px', width: '90%', maxWidth: '500px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', border: '1px solid #333', color: '#e0e0e0' },
+    modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '10px', borderBottom: '1px solid #333' },
+    closeButton: { background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: '#888' },
     bomContainer: { display: 'flex', flexDirection: 'column', gap: '12px' },
-    bomRow: { display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem', color: '#4a5568' },
-    bomDivider: { margin: '5px 0', border: 0, borderTop: '1px dashed #cbd5e0' },
-    bomTotalRow: { display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', fontWeight: '700', color: '#2d3748', borderTop: '2px solid #e2e8f0', marginTop: '10px', paddingTop: '15px' },
+    bomRow: { display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem', color: '#a0aec0' },
+    bomDivider: { margin: '5px 0', border: 0, borderTop: '1px dashed #333' },
+    bomTotalRow: { display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', fontWeight: '700', color: '#fff', borderTop: '2px solid #333', marginTop: '10px', paddingTop: '15px' },
 
-    // TARJOUSMODAL (UUDET TYYLIT)
-    quoteModalBox: { backgroundColor: 'white', padding: '40px', borderRadius: '20px', width: '90%', maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', border: '1px solid #e2e8f0' },
+    quoteModalBox: { backgroundColor: '#1a1a1a', padding: '40px', borderRadius: '20px', width: '90%', maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', border: '1px solid #333', color: '#e0e0e0' },
     quoteForm: { display: 'flex', flexDirection: 'column', gap: '30px' },
     formSection: { display: 'flex', flexDirection: 'column', gap: '15px' },
-    sectionTitle: { fontSize: '1.1rem', fontWeight: '700', color: '#2d3748', borderBottom: '1px solid #eee', paddingBottom: '10px', marginBottom: '10px' },
+    sectionTitle: { fontSize: '1.1rem', fontWeight: '700', color: '#fff', borderBottom: '1px solid #333', paddingBottom: '10px', marginBottom: '10px' },
     formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' },
     field: { display: 'flex', flexDirection: 'column', gap: '8px' },
 
-    // YHTENÄISET INPUT TYYLIT
-    modalInput: { padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', backgroundColor: '#fff', fontSize: '1rem', outline: 'none', transition: 'border-color 0.2s' },
-    modalTextArea: { padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', backgroundColor: '#fff', fontSize: '1rem', resize: 'vertical', fontFamily: 'inherit', outline: 'none' },
-    helperText: { fontSize: '0.8rem', color: '#718096', fontStyle: 'italic', marginTop: '4px' },
+    modalInput: { padding: '12px 16px', borderRadius: '12px', border: '2px solid #333', backgroundColor: '#252525', fontSize: '1rem', outline: 'none', color: '#e0e0e0', transition: 'border-color 0.2s' },
+    modalTextArea: { padding: '12px 16px', borderRadius: '12px', border: '2px solid #333', backgroundColor: '#252525', fontSize: '1rem', resize: 'vertical', fontFamily: 'inherit', outline: 'none', color: '#e0e0e0' },
+    helperText: { fontSize: '0.8rem', color: '#666', fontStyle: 'italic', marginTop: '4px' },
 
     modalFooter: { display: 'flex', justifyContent: 'flex-end', gap: '15px', marginTop: '20px' },
 
     loadingBox: { textAlign: 'center', padding: '40px' },
-    spinner: { width: '40px', height: '40px', border: '4px solid #f3f3f3', borderTop: '4px solid #3182ce', borderRadius: '50%', margin: '0 auto 20px', animation: 'spin 1s linear infinite' },
-    errorBox: { backgroundColor: '#fff5f5', color: '#c53030', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #feb2b2' },
-    placeholderBox: { padding: '60px', textAlign: 'center', color: '#a0aec0', border: '2px dashed #cbd5e0', borderRadius: '16px', backgroundColor: 'white' }
+    spinner: { width: '40px', height: '40px', border: '4px solid #333', borderTop: '4px solid #4fc3f7', borderRadius: '50%', margin: '0 auto 20px', animation: 'spin 1s linear infinite' },
+    errorBox: { backgroundColor: '#3a1c1c', color: '#fc8181', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #742a2a' },
+    placeholderBox: { padding: '60px', textAlign: 'center', color: '#666', border: '2px dashed #333', borderRadius: '16px', backgroundColor: '#1a1a1a' }
 };
 
 export default PriceCalculator;
