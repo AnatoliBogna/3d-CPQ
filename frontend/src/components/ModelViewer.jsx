@@ -17,7 +17,6 @@ const Model = ({ url, extension }) => {
 
     const loadedObject = useLoader(Loader, url);
 
-    // Yhteinen sininen materiaali
     const sharedMaterial = useMemo(() => new THREE.MeshStandardMaterial({
         color: "#007bff",
         roughness: 0.5,
@@ -29,28 +28,20 @@ const Model = ({ url, extension }) => {
         return loadedObject.clone();
     }, [loadedObject, extension]);
 
-    // --- KORJAUSLOGIIKKA ---
     useEffect(() => {
         if (extension !== 'stl') {
             scene.traverse((child) => {
                 if (child.isMesh) {
-                    // 1. Pakota materiaali
                     child.material = sharedMaterial;
-
-                    // 2. KORJAUS: Poista 3MF/OBJ omat värit (Vertex Colors), jotta malli on sininen
                     if (child.geometry.attributes.color) {
                         child.geometry.deleteAttribute('color');
                     }
-
-                    // 3. KORJAUS: Laske normaalit uudelleen, jos malli näyttää "litteältä" tai oudolta
                     child.geometry.computeVertexNormals();
-
                     child.castShadow = true;
                     child.receiveShadow = true;
                 }
             });
         } else {
-            // Myös STL:lle kannattaa varmistaa normaalit
             if (scene.attributes && scene.attributes.color) {
                 scene.deleteAttribute('color');
             }
@@ -86,18 +77,53 @@ const ModelViewer = ({ fileUrl, fileName }) => {
     const extension = fileName.split('.').pop().toLowerCase();
 
     return (
-        <div style={{ width: '100%', height: '400px', background: '#f0f0f0', borderRadius: '8px', overflow: 'hidden' }}>
-            <Canvas shadows camera={{ position: [0, 0, 150], fov: 50 }}>
+        <div style={styles.container}>
+            {/* 3D CANVAS */}
+            <Canvas
+                shadows
+                camera={{ position: [0, 0, 150], fov: 50 }}
+                style={{ cursor: 'grab' }}
+            >
                 <Suspense fallback={null}>
-                    {/* adjustCamera: false estää kameraa hyppimästä liikaa 3MF:n oudoilla koordinaateilla */}
                     <Stage environment="city" intensity={0.6} adjustCamera={1.2}>
                         <Model url={fileUrl} extension={extension} />
                     </Stage>
                 </Suspense>
-                <OrbitControls autoRotate autoRotateSpeed={2.0} />
+                <OrbitControls autoRotate autoRotateSpeed={2.0} makeDefault />
             </Canvas>
+
+            {/* MINIMALISTINEN VIHJE (OIKEA ALANURKKA) */}
+            <div style={styles.interactionHint}>
+                <span style={{ fontSize: '14px', marginRight: '4px' }}>↺</span>
+                Pyöritä & Zoomaa
+            </div>
         </div>
     );
+};
+
+const styles = {
+    container: {
+        width: '100%',
+        height: '400px',
+        background: '#f0f0f0',
+        borderRadius: '16px',
+        overflow: 'hidden',
+        position: 'relative',
+        boxShadow: 'inset 0 0 20px rgba(0,0,0,0.05)'
+    },
+    interactionHint: {
+        position: 'absolute',
+        bottom: '10px',        // Alareuna
+        right: '12px',         // Oikea reuna (keskityksen sijaan)
+        fontSize: '0.7rem',    // Pienempi teksti
+        color: '#a0aec0',      // Haalea harmaa
+        fontWeight: '500',
+        pointerEvents: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        opacity: 0.8,          // Hieman läpinäkyvä
+        userSelect: 'none'     // Estää tekstin maalauksen
+    }
 };
 
 export default ModelViewer;
