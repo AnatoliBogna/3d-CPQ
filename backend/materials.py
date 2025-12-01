@@ -7,7 +7,7 @@ TECHNOLOGIES = {
     "3d_printing": {
         "label": "3D-Tulostustekniikat",
         "methods": {
-            # --- FDM (LISÄTTY VERTAILUN VUOKSI) ---
+            # --- FDM (VERTAILUN VUOKSI) ---
             "fdm_pro": {
                 "name": "FDM (Lankatulostus)",
                 "startup": 20.0,
