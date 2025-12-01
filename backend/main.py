@@ -1,17 +1,40 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
 from typing import Optional
 import trimesh
 import numpy as np
 import os
 import uuid
 import shutil
+import time
+import threading
+import glob
 
-# TUODAAN MATERIAALIKIRJASTO
+# Tuodaan materiaalikirjasto
 from materials import TECHNOLOGIES 
 
-app = FastAPI()
+# --- KONFIGURAATIO ---
+UPLOAD_DIR = "temp_uploads"
+
+# --- ELINKAARIHALLINTA (LIFESPAN) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Käynnistys: Siivotaan vanhat roskat
+    if not os.path.exists(UPLOAD_DIR):
+        os.makedirs(UPLOAD_DIR)
+    else:
+        files = glob.glob(os.path.join(UPLOAD_DIR, "*"))
+        for f in files:
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,19 +44,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- KONFIGURAATIO ---
-UPLOAD_DIR = "temp_uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Tarjoillaan temp-kansio julkisesti (GLB-tiedostoja varten)
+app.mount("/files", StaticFiles(directory=UPLOAD_DIR), name="files")
 
 # --- APUFUNKTIOT ---
-def remove_file(path: str):
-    """Tuhoaa tiedoston levyltä analyysin jälkeen"""
+def delayed_remove_file(path: str, delay: int = 60):
+    """Poistaa tiedoston viiveellä (jotta frontend ehtii ladata sen)."""
+    def _remove():
+        time.sleep(delay)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            print(f"Virhe poistossa: {e}")
+    
+    thread = threading.Thread(target=_remove)
+    thread.daemon = True
+    thread.start()
+
+def get_smart_volume(mesh):
+    """Laskee tilavuuden ja korjaa yleisimmät geometriavirheet."""
+    # Skaalaus jos yksiköt pielessä (oletetaan metrit -> millimetrit)
+    if np.max(mesh.extents) < 2.0: 
+        mesh.apply_scale(1000)
+    
     try:
-        if os.path.exists(path):
-            os.remove(path)
-            print(f"Siivous: Poistettu {path}")
-    except Exception as e:
-        print(f"Virhe tiedoston poistossa: {e}")
+        mesh.merge_vertices()
+    except:
+        pass
+    
+    if mesh.is_watertight:
+        return mesh.volume / 1000.0
+    else:
+        try:
+            return mesh.convex_hull.volume / 1000.0
+        except:
+            return (mesh.bounding_box.volume * 0.5) / 1000.0
 
 # --- TIETOMALLIT ---
 class QuoteRequest(BaseModel):
@@ -56,55 +102,66 @@ class QuoteRequest(BaseModel):
 # --- ENDPOINTIT ---
 
 @app.post("/analyze")
-async def analyze_model(
-    background_tasks: BackgroundTasks, # FastAPI:n taustaprosessi
-    file: UploadFile = File(...)
-):
-    allowed_extensions = ('.stl', '.STL', '.obj', '.OBJ', '.3mf', '.3MF')
+async def analyze_model(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    # 1. Validointi
+    allowed_extensions = ('.stl', '.STL', '.obj', '.OBJ', '.3mf', '.3MF', '.step', '.STEP', '.stp', '.STP')
     if not file.filename.endswith(allowed_extensions):
-        raise HTTPException(status_code=400, detail="Tuetut tiedostot: STL, OBJ, 3MF")
+        raise HTTPException(status_code=400, detail="Tuetut tiedostot: STL, OBJ, 3MF, STEP")
 
-    # 1. Luodaan uniikki tiedostonimi ja polku
     file_ext = file.filename.split('.')[-1].lower()
-    unique_filename = f"{uuid.uuid4()}.{file_ext}"
+    unique_id = uuid.uuid4()
+    unique_filename = f"{unique_id}.{file_ext}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
     try:
-        # 2. Tallennetaan tiedosto levylle (säästää RAM-muistia)
+        # 2. Tallennus levylle
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # 3. Määritetään automaattinen poisto heti vastauksen jälkeen
-        background_tasks.add_task(remove_file, file_path)
+        # 3. Lataus (Trimesh / Meshio fallback)
+        mesh = None
+        try:
+            mesh = trimesh.load(file_path, file_type=file_ext)
+        except Exception:
+            pass # Yritetään plan B
 
-        # 4. Ladataan Trimesh suoraan levyltä
-        mesh = trimesh.load(file_path, file_type=file_ext)
-        
+        if mesh is None or (isinstance(mesh, trimesh.Scene) and len(mesh.geometry) == 0):
+            try:
+                import meshio
+                mesh_data = meshio.read(file_path)
+                mesh = trimesh.Trimesh(vertices=mesh_data.points, faces=mesh_data.cells[0].data)
+            except Exception as e:
+                raise ValueError(f"Tiedoston luku epäonnistui: {str(e)}")
+
         if isinstance(mesh, trimesh.Scene):
-            if len(mesh.geometry) == 0: raise ValueError("Tyhjä tiedosto")
+            if len(mesh.geometry) == 0: raise ValueError("Tiedosto on tyhjä.")
             mesh = trimesh.util.concatenate(tuple(trimesh.util.concatenate(g) for g in mesh.geometry.values()))
 
-        volume_cm3 = mesh.volume / 1000 
+        # 4. Visualisointi (STEP -> GLB muunnos)
+        visualization_url = None
+        try:
+            glb_filename = f"{unique_id}.glb"
+            glb_path = os.path.join(UPLOAD_DIR, glb_filename)
+            mesh.export(glb_path)
+            # TUOTANNOSSA: Vaihda domain oikeaksi!
+            visualization_url = f"http://127.0.0.1:8000/files/{glb_filename}"
+            delayed_remove_file(glb_path, delay=60)
+        except Exception as e:
+            print(f"GLB-vienti epäonnistui: {e}")
+
+        # 5. Laskenta
+        volume_cm3 = get_smart_volume(mesh)
         bbox = mesh.bounding_box.extents
         
-        # --- LASKENTA ---
         estimates = {}
         for category_key, category in TECHNOLOGIES.items():
             for tech_key, tech in category['methods'].items():
                 tech_estimates = {}
-                
                 startup_fee = tech['startup']
-                
-                # Haetaan tekniikkakohtainen tilavuuskerroin
                 vol_factor = tech.get('volume_factor', 1.0)
-                
+
                 for mat_key, mat in tech['materials'].items():
-                    
-                    # Lasketaan "todellinen" materiaalin kulutus
-                    # FDM: 100cm3 kappale -> maksetaan vain 40cm3 edestä materiaalia
-                    # CNC: 100cm3 kappale -> maksetaan 250cm3 edestä materiaalia (aihio)
                     effective_volume = volume_cm3 * vol_factor
-                    
                     material_cost = effective_volume * mat['rate']
                     total_cost = material_cost + startup_fee
                     
@@ -118,7 +175,6 @@ async def analyze_model(
                             "material_rate": mat['rate'],
                             "material_cost": round(material_cost, 2),
                             "volume": round(volume_cm3, 2),
-                            "charged_volume": round(effective_volume, 2), # Debuggausta varten hyödyllinen
                             "technology": tech['name']
                         }
                     }
@@ -126,11 +182,10 @@ async def analyze_model(
 
         return {
             "filename": file.filename,
+            "visualization_url": visualization_url,
             "geometry": {
                 "volume_cm3": round(volume_cm3, 2),
-                "dimensions_mm": {
-                    "x": round(bbox[0], 1), "y": round(bbox[1], 1), "z": round(bbox[2], 1)
-                }
+                "dimensions_mm": {"x": round(bbox[0], 1), "y": round(bbox[1], 1), "z": round(bbox[2], 1)}
             },
             "estimates": estimates,
             "structure": TECHNOLOGIES,
@@ -138,22 +193,20 @@ async def analyze_model(
         }
 
     except Exception as e:
-        # Jos jotain menee pieleen, yritetään poistaa tiedosto heti
-        remove_file(file_path)
         print(f"Virhe: {e}")
-        return {"error": "Analyysi epäonnistui."}
+        return {"error": f"Analyysi epäonnistui: {str(e)}"}
+    
+    finally:
+        # 6. Siivous: Alkuperäinen tiedosto poistetaan AINA heti
+        if os.path.exists(file_path):
+            try: os.remove(file_path)
+            except: pass
 
 @app.post("/send-quote")
 async def send_quote(request: QuoteRequest):
-    print("--- UUSI TARJOUSPYYNTÖ ---")
-    print(f"Asiakas: {request.name} ({request.company})")
-    print(f"Email: {request.email}, Puh: {request.phone}")
-    print(f"Kappale: {request.filename}, Määrä: {request.quantity}")
-    print(f"Tekniikka: {request.technology}, Materiaali: {request.material}")
-    print(f"Lisätiedot: Pinta: {request.surface_structure}, Väri: {request.color_request}")
-    print(f"Viesti: {request.additional_notes}")
-    print("--------------------------")
-    return {"message": "Tarjouspyyntö vastaanotettu onnistuneesti."}
+    # TODO: Kytke sähköpostipalvelu tähän
+    print(f"TARJOUS: {request.name} - {request.filename} ({request.estimated_price}€)")
+    return {"message": "OK"}
 
 @app.get("/")
 def read_root():
