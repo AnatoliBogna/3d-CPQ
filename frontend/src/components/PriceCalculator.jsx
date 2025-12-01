@@ -134,9 +134,24 @@ const PriceCalculator = () => {
     }, [result, selectedTech]);
 
     const finishOptions = [
-        { key: 'bulk', label: 'Bulk', multiplier: 1.0, desc: 'Peruslaatu. Osat puhdistetaan jauheesta ja tukirakenteista.' },
-        { key: 'cost_effective', label: 'Kustannustehokas', multiplier: 1.15, desc: 'Koneellinen viimeistely (esim. raepuhallus). Tasoittaa pinnan.' },
-        { key: 'custom', label: 'Yksilöllinen', multiplier: 1.6, desc: 'Vaativa viimeistely: maalaus, lakkaus tai kiillotus.' }
+        {
+            key: 'bulk',
+            label: 'Bulk (Vakio)',
+            multiplier: 1.0,
+            desc: 'Vakio ilman lisäkustannuksia. Sisältää menetelmäkohtaisen puhdistuksen: pulverinpoisto ja kanavien avaus (SLS/MJF), tukirakenteiden poisto ja pesu (SLA/DLP) tai valupurseiden poisto.'
+        },
+        {
+            key: 'cost_effective',
+            label: 'Kustannustehokas',
+            multiplier: 1.20,
+            desc: 'Pinnan tekninen muokkaus ja värjäys. Menetelmät: Powershot S -kuulapuhallus, höyrytiivistys, infiltrointi tai kemiallinen värjäys (dippaus/ylimaalaus).'
+        },
+        {
+            key: 'custom',
+            label: 'Yksilöllinen',
+            multiplier: 1.60,
+            desc: 'Vaativa erikoisviimeistely. Esim. ruiskumaalaus (RAL/kiiltoasteet), lakkaus (optinen kirkkaus), VDI-pinnat, Soft touch, insertointi tai silkkipainatus.'
+        }
     ];
 
     const deliveryOptions = [
@@ -452,7 +467,7 @@ const PriceCalculator = () => {
                     <div style={styles.modalOverlay}>
                         <div style={styles.quoteModalBox}>
                             <div style={styles.modalHeader}>
-                                <h2>Pyydä sitova tarjous</h2>
+                                <h2>Lähetä tarjouspyyntö</h2>
                                 <button style={styles.closeButton} onClick={() => setShowQuoteModal(false)}>×</button>
                             </div>
                             {formStatus === 'success' ? (
@@ -470,20 +485,36 @@ const PriceCalculator = () => {
                                             <div style={styles.field}><label style={styles.label}>Sähköposti *</label><input required type="email" style={styles.modalInput} value={quoteForm.email} onChange={e => setQuoteForm({ ...quoteForm, email: e.target.value })} /></div>
                                         </div>
                                     </div>
-                                    <div style={styles.formSection}>
-                                        <h4 style={styles.sectionTitle}>Tuotteen tarkennukset</h4>
-                                        <div style={styles.formGrid}>
-                                            <div style={styles.field}>
-                                                <label style={styles.label}>Pintastruktuuri</label>
-                                                <input type="text" placeholder="Esim. sileä, karhea..." style={styles.modalInput} value={quoteForm.surface} onChange={e => setQuoteForm({ ...quoteForm, surface: e.target.value })} />
-                                                <span style={styles.helperText}>Määrittele pinnan laatu (esim. VDI 3400).</span>
-                                            </div>
-                                            <div style={styles.field}>
-                                                <label style={styles.label}>Väri</label>
-                                                <input type="text" placeholder="Esim. RAL 9005" style={styles.modalInput} value={quoteForm.color} onChange={e => setQuoteForm({ ...quoteForm, color: e.target.value })} />
-                                                <span style={styles.helperText}>Jos ei väliä, jätä tyhjäksi.</span>
-                                            </div>
-                                            <div style={{ ...styles.field, gridColumn: '1 / -1' }}><label style={styles.label}>Käyttökohde</label><input type="text" style={styles.modalInput} value={quoteForm.application} onChange={e => setQuoteForm({ ...quoteForm, application: e.target.value })} /></div>
+                                    <div style={styles.formGrid}>
+                                        <div style={styles.field}>
+                                            <label style={styles.label}>Pintastruktuuri</label>
+                                            <input
+                                                type="text"
+                                                placeholder="Esim. Sileä, Koneistuspinta, VDI 3400..."
+                                                style={styles.modalInput}
+                                                value={quoteForm.surface}
+                                                onChange={e => setQuoteForm({ ...quoteForm, surface: e.target.value })}
+                                            />
+                                        </div>
+                                        <div style={styles.field}>
+                                            <label style={styles.label}>Väri</label>
+                                            <input
+                                                type="text"
+                                                placeholder="Jätä tyhjäksi jos ei väliä"
+                                                style={styles.modalInput}
+                                                value={quoteForm.color}
+                                                onChange={e => setQuoteForm({ ...quoteForm, color: e.target.value })}
+                                            />
+                                        </div>
+                                        <div style={{ ...styles.field, gridColumn: '1 / -1' }}>
+                                            <label style={styles.label}>Käyttökohde</label>
+                                            <input
+                                                type="text"
+                                                placeholder="Esim. Ulkokäyttö, UV-altistus, Kemikaalien kesto, Prototyyppi..."
+                                                style={styles.modalInput}
+                                                value={quoteForm.application}
+                                                onChange={e => setQuoteForm({ ...quoteForm, application: e.target.value })}
+                                            />
                                         </div>
                                     </div>
                                     <div style={styles.formSection}>
@@ -501,6 +532,10 @@ const PriceCalculator = () => {
                         </div>
                     </div>
                 )}
+
+                <footer style={styles.footer}>
+                    by Anton Niemi for Ajatec 2025
+                </footer>
 
             </div>
         </>
@@ -582,6 +617,18 @@ const styles = {
         gap: '6px',
         transition: 'all 0.2s'
     },
+
+    footer: {
+        marginTop: '120px',
+        color: '#a0aec0',
+        fontSize: '0.85rem',
+        fontWeight: '500',
+        letterSpacing: '0.05em',
+        textAlign: 'center',
+        width: '100%',
+        opacity: 0.8
+    },
+
     infoIcon: { width: '16px', height: '16px', borderRadius: '50%', background: '#2f855a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold', fontStyle: 'normal' },
 
     actionRow: { display: 'flex', gap: '15px', width: '100%', marginTop: '20px' },

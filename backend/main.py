@@ -1,10 +1,12 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import trimesh
-import io
 import numpy as np
+import os
+import uuid
+import shutil
 
 # TUODAAN MATERIAALIKIRJASTO
 from materials import TECHNOLOGIES 
@@ -13,15 +15,28 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "https://caari.fi", "https://www.caari.fi"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --- KONFIGURAATIO ---
+UPLOAD_DIR = "temp_uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# --- APUFUNKTIOT ---
+def remove_file(path: str):
+    """Tuhoaa tiedoston levyltä analyysin jälkeen"""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"Siivous: Poistettu {path}")
+    except Exception as e:
+        print(f"Virhe tiedoston poistossa: {e}")
+
 # --- TIETOMALLIT ---
 class QuoteRequest(BaseModel):
-    # Tilaustiedot
     filename: str
     technology: str
     material: str
@@ -29,12 +44,10 @@ class QuoteRequest(BaseModel):
     delivery: str
     quantity: int
     estimated_price: float
-    # Asiakastiedot
     name: str
     company: Optional[str] = None
     email: str
     phone: str
-    # Lisätiedot
     surface_structure: Optional[str] = None
     color_request: Optional[str] = None
     application_use: Optional[str] = None
@@ -43,17 +56,30 @@ class QuoteRequest(BaseModel):
 # --- ENDPOINTIT ---
 
 @app.post("/analyze")
-async def analyze_model(file: UploadFile = File(...)):
+async def analyze_model(
+    background_tasks: BackgroundTasks, # FastAPI:n taustaprosessi
+    file: UploadFile = File(...)
+):
     allowed_extensions = ('.stl', '.STL', '.obj', '.OBJ', '.3mf', '.3MF')
     if not file.filename.endswith(allowed_extensions):
         raise HTTPException(status_code=400, detail="Tuetut tiedostot: STL, OBJ, 3MF")
 
+    # 1. Luodaan uniikki tiedostonimi ja polku
+    file_ext = file.filename.split('.')[-1].lower()
+    unique_filename = f"{uuid.uuid4()}.{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
     try:
-        content = await file.read()
-        file_obj = io.BytesIO(content)
-        file_ext = file.filename.split('.')[-1].lower()
+        # 2. Tallennetaan tiedosto levylle (säästää RAM-muistia)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
         
-        mesh = trimesh.load(file_obj, file_type=file_ext)
+        # 3. Määritetään automaattinen poisto heti vastauksen jälkeen
+        background_tasks.add_task(remove_file, file_path)
+
+        # 4. Ladataan Trimesh suoraan levyltä
+        mesh = trimesh.load(file_path, file_type=file_ext)
+        
         if isinstance(mesh, trimesh.Scene):
             if len(mesh.geometry) == 0: raise ValueError("Tyhjä tiedosto")
             mesh = trimesh.util.concatenate(tuple(trimesh.util.concatenate(g) for g in mesh.geometry.values()))
@@ -61,15 +87,25 @@ async def analyze_model(file: UploadFile = File(...)):
         volume_cm3 = mesh.volume / 1000 
         bbox = mesh.bounding_box.extents
         
-        # --- LASKENTA (Käyttää importattua TECHNOLOGIES-kirjastoa) ---
+        # --- LASKENTA ---
         estimates = {}
         for category_key, category in TECHNOLOGIES.items():
             for tech_key, tech in category['methods'].items():
                 tech_estimates = {}
+                
                 startup_fee = tech['startup']
+                
+                # Haetaan tekniikkakohtainen tilavuuskerroin
+                vol_factor = tech.get('volume_factor', 1.0)
+                
                 for mat_key, mat in tech['materials'].items():
-                    waste_factor = 2.5 if tech_key == 'cnc' else 1.0
-                    material_cost = volume_cm3 * mat['rate'] * waste_factor
+                    
+                    # Lasketaan "todellinen" materiaalin kulutus
+                    # FDM: 100cm3 kappale -> maksetaan vain 40cm3 edestä materiaalia
+                    # CNC: 100cm3 kappale -> maksetaan 250cm3 edestä materiaalia (aihio)
+                    effective_volume = volume_cm3 * vol_factor
+                    
+                    material_cost = effective_volume * mat['rate']
                     total_cost = material_cost + startup_fee
                     
                     tech_estimates[mat_key] = {
@@ -82,6 +118,7 @@ async def analyze_model(file: UploadFile = File(...)):
                             "material_rate": mat['rate'],
                             "material_cost": round(material_cost, 2),
                             "volume": round(volume_cm3, 2),
+                            "charged_volume": round(effective_volume, 2), # Debuggausta varten hyödyllinen
                             "technology": tech['name']
                         }
                     }
@@ -101,6 +138,8 @@ async def analyze_model(file: UploadFile = File(...)):
         }
 
     except Exception as e:
+        # Jos jotain menee pieleen, yritetään poistaa tiedosto heti
+        remove_file(file_path)
         print(f"Virhe: {e}")
         return {"error": "Analyysi epäonnistui."}
 
